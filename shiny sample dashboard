@@ -1,0 +1,785 @@
+library(openxlsx)
+library(shiny)
+library(xlsx)
+library(dplyr)
+library(shinydashboard)
+library(shinyWidgets)
+library(rhandsontable)
+library(tidyr)
+library(plotly)
+library(stringr)
+library(data.table)
+library(shinyalert)
+#library(operators)
+
+##To stop deprication messages from popping up
+options(shiny.deprecation.messages=FALSE)
+##supress unnecessary warnings  
+storeWarn<- getOption("warn")
+options(warn = -1)
+
+## read data after modification if any from another r script
+source("data_input.R")
+
+###datattypes of required columns
+data[, c(9:16,18:22)] <- sapply(data[, c(9:16,18:22)], as.numeric)
+data_old[, c(9:16,18:22)] <- sapply(data_old[, c(9:16,18:22)],as.numeric)
+
+
+param<-data.frame(compliance_upside=0,price_upside=0,compliance_downside=0,price_downside=0)
+data<-cbind(data,param)
+
+data<-data %>% filter(NetPrice_pm_USD>0)
+
+#data_old<-data_old %>% filter(NetPrice_pm_USD>0)
+
+
+########### UI of the page starts here################
+ui <- dashboardPage(
+  skin="blue",
+  
+  dashboardHeader(title = tags$a(tags$img(src='logo_1.png',height = "45px",width="45px"),' Forecast Simulation Tool', style = "color: white;padding-bottom:5px;margin-left:0px;padding-left:0px;"),titleWidth = 300),
+  #"Forecast Simulation Tool",titleWidth = 300),
+  
+  dashboardSidebar(width = 300,
+                   selectInput(inputId = "process",
+                               label = "Process",
+                               choices = unique(data$Process),selected =data$Process[1]),
+                   selectInput(inputId = "indication",
+                               label = "Indication",
+                               choices = unique(data$Indication),selected=data$Indication[1]),
+                   selectInput(inputId = "country",
+                               label = "Country",
+                               choices = unique(data$Country),selected=data$Country[1]),
+                   selectInput(inputId = "segment",
+                               label = "Segment",multiple = TRUE,
+                               choices = unique(data$Segment),selected=data$Segment[1]),
+                   selectInput(inputId = "patientcategory",
+                               label = "Patientcategory",multiple = TRUE,
+                               choices = unique(data$Pat_Cat),selected=data$Pat_Cat[1]),
+                   selectInput(inputId = "lot",
+                               label = "LOT",multiple = TRUE,
+                               choices = unique(data$LoT),selected=data$LoT[1]),
+                   selectInput(inputId = "product",
+                               label = "Product",
+                               choices = unique(data$Product),selected=data$Product[1]),
+                   br(),
+                   column(12,actionButton("apply","Apply",style="background-color: #046bb5;color:white;border-color:#046bb5;"))
+                   
+  ),
+  
+  
+  dashboardBody(
+    useShinyalert(),
+    
+    tags$style(HTML("
+                    
+                    .box.box-solid.box-primary>.box-header {
+                    color:#fff;
+                    background:#094094
+                    }
+                    /* logo */
+                    .skin-blue .main-header .logo {
+                    background-color:#021252;
+                    }
+                    
+                    /* logo when hovered */
+                    .skin-blue .main-header .logo:hover {
+                    background-color: #021252;
+                    }
+                    .skin-blue .main-header .navbar {
+                    background-color:#021252;
+                    }
+                    
+                    
+                    .content-wrapper, .right-side {
+                    background-color: #080707;
+                    }
+                    
+                    
+                    ")),
+    
+    downloadButton('downloadReport','Download data',style="background-color:#00b300;color:white;border-radius: 18px;border-color:#00b300;display: inline-block;float: right;"),
+    tabsetPanel(type = "tabs",
+                tabPanel("Info",
+                         br(),
+                         p('What does this tool help me with?',style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;margin-top:2px"),
+                         span(
+                           tags$ul(
+                             tags$li('Changing variables to observe the effect on the revenue - sensitivity analysis'),
+                             tags$li('Scenario can be genarated by changing variables and can be compared with base case'),
+                             tags$li('Dollar impact of parameters price and volume can be calculated for the base case')
+                           ),style="color:#e6e7ed;font-family:Verdana, Geneva, sans-serif;"
+                         ),
+                         p('Can you download the data tables and graphs?',style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;margin-top:2px"),
+                         span(
+                           tags$ul(
+                             tags$li('Click on download button on top right corner to download the data tables along with filer selection'),
+                             tags$li('Download the graphs by clicking on download png option over the graphs')
+                           ),style="color:#e6e7ed;font-family:Verdana, Geneva, sans-serif;"),
+                         
+                         p('Can we submit these numbers?',style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;margin-top:2px"),
+                         span(
+                           tags$ul(
+                             tags$li('Currently its not connected to submission system, its for testing out multiple scenarios before submission to aid the discussion')
+                           ),style="color:#e6e7ed;font-family:Verdana, Geneva, sans-serif;")
+                ),
+                tabPanel("Scenario simulation",
+                         br(),
+                         fluidRow(
+                           column(width=10,
+                                  p(span("Please edit the parameters in",
+                                         style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;margin-top:2px"),
+                                    span("Yellow",style="font-family:Verdana, Geneva, sans-serif;background-color:#ffff00;"),
+                                    span("to observe scenario simulation based on the change in parameters",style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;")),
+                                  box(title = "Simulation parameters", width = "700px",solidHeader = TRUE,status = "primary",
+                                      rHandsontableOutput("table",height = "260px",width = "970px"),
+                                      tags$style(type="text/css", "#table th {word-wrap:break-word;
+                                                 font-weight:bold;color:#f7f9fa;background-color:#0d314f;}")
+                                      ))
+                           
+                           #HTML("<div class='col-sm-3' style='min-width: 750px !important;'>"),
+                           
+                         ),
+                         fluidRow(
+                           actionButton("submit","Submit",style = "display:inline-block;color: white;background-color: #046bb5;float:left; margin-left:15px")     
+                         ),
+                         
+                         fluidRow(
+                           column(10,
+                                  p("Below graph shows the revenue simulated based on the adjsuted parameters ",style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;margin-left:10px;margin-top:10px;"),
+                                  box(title="Simulated output", solidHeader = TRUE,status = "primary",width="700px",height="400px",
+                                      plotlyOutput("plot",height="350px",width="auto"))
+                           )),
+                         fluidRow(
+                           
+                           column(10,
+                                  p(span("Below table shows inputs that are used to simulate the graph and the columns in",style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;margin-top:10px;"),
+                                    span("grey",style="background-color:#d5d9e0;font-family:Verdana, Geneva, sans-serif;"),span("highlight the revenue simulated for scenarios and % difference between them",style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;")),
+                                  box(title = "Simulation results", width = "700px", solidHeader = TRUE,status = "primary",height="310px",
+                                      rHandsontableOutput("table_chngd",width="auto"),
+                                      tags$style(type="text/css", "#table_chngd th {font-weight:bold;color:#f7f9fa;background-color:#0d314f;}")
+                                  ))
+                         )
+                ),
+                tabPanel("Impact analysis",
+                         fluidRow(
+                           p("Dollar impact analysis",style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;margin-top:10px;margin-left:10px;"),
+                           column(10,
+                                  box(title = "Dollar Impact Calculation", width = "600px",solidHeader = TRUE,status = "primary",
+                                      rHandsontableOutput("impact_table",height = "200px",width = "auto"),
+                                      tags$style(type="text/css", "#impact_table th {font-weight:bold;color:#f7f9fa;background-color:#0d314f;}")
+                                  ))),
+                         fluidRow(                           
+                           p("Note: Volume=Patients*Compliance*Price calculated is being used in the above table",style="color:#0d99bf;
+                             font-family:Verdana, Geneva, sans-serif;margin-top:10px;margin-left:10px;font-weight:3px;")),
+                         
+                         p("Please select the year to view the impact. Graph shows the absolute dollar value contribution of parameters for the change in revenue",style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;margin-top:10px;margin-left:0px;"),
+                         fluidRow(
+                           column(2,selectInput("year1","Select base year",unique(data$Year),selected=data$Year[1]),style ="float:left; margin-left:30px;color:#e6e7ed;font-family:Verdana, Geneva, sans-serif;font-size:12px;"),
+                           column(2,selectInput("year2","Select secondary year",unique(data$Year),selected=data$Year[1]),style ="float:left;margin-left:70px;color:#e6e7ed;font-family:Verdana, Geneva, sans-serif;font-size:12px;")),
+                         
+                         fluidRow(                 
+                           column(10,
+                                  box(title="Dollar impact across years", solidHeader = TRUE,status = "primary",width="550px",height="400px",
+                                      plotlyOutput("plot_imp",height="350px",width="550px"))
+                           ),
+                           column(10,
+                                  box(title = "Dollar Impact Calculation", width = "600px",solidHeader = TRUE,status = "primary",
+                                      rHandsontableOutput("impact_table_up",height = "200px",width = "auto"),
+                                      tags$style(type="text/css", "#impact_table_up th {font-weight:bold;color:#f7f9fa;background-color:#0d314f;}")
+                                  )),
+                           column(10,
+                                  
+                                  box(title="Dollar impact for base vs upside", solidHeader = TRUE,status = "primary",width="550px",height="400px",
+                                      plotlyOutput("plot_imp_up",height="350px",width="550px"))
+                           ),
+                           column(10,
+                                  box(title = "Dollar Impact Calculation", width = "600px",solidHeader = TRUE,status = "primary",
+                                      rHandsontableOutput("impact_table_down",height = "200px",width = "auto"),
+                                      tags$style(type="text/css", "#impact_table_up th {font-weight:bold;color:#f7f9fa;background-color:#0d314f;}")
+                                  )),
+                           column(10,
+                                  
+                                  box(title="Dollar impact for base vs downside", solidHeader = TRUE,status = "primary",width="550px",height="400px",
+                                      plotlyOutput("plot_imp_down",height="350px",width="550px"))
+                           )
+                         )
+                           ),
+                tabPanel("Across plan impact",
+                         fluidRow(
+                           p("Dollar impact analysis",style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;margin-top:10px;margin-left:10px;"),
+                           column(10,
+                                  box(title = "Dollar Impact Calculation", width = "600px",solidHeader = TRUE,status = "primary",
+                                      rHandsontableOutput("impact_table_old",height = "200px",width = "auto"),
+                                      tags$style(type="text/css", "#impact_table_old th {font-weight:bold;color:#f7f9fa;background-color:#0d314f;}")
+                                  ))),
+                         p("Please select the year to view the impact. Graph shows the absolute dollar value contribution of parameters for the change in revenue",style="color:#0d99bf;font-family:Verdana, Geneva, sans-serif;margin-top:10px;margin-left:0px;"),
+                         fluidRow(
+                           column(2,selectInput("year11","Select base year",unique(data$Year),selected=data$Year[1]),style ="float:left; margin-left:30px;color:#e6e7ed;font-family:Verdana, Geneva, sans-serif;font-size:12px;")
+                           #column(2,selectInput("year22","Select secondary year",unique(data$Year),selected=data$Year[1]),style ="float:left;margin-left:70px;color:#e6e7ed;font-family:Verdana, Geneva, sans-serif;font-size:12px;")
+                         ),
+                         column(10,
+                                
+                                box(title="Dollar impact across startplan for same year", solidHeader = TRUE,status = "primary",width="550px",height="400px",
+                                    plotlyOutput("plot_imp_com",height="350px",width="550px"))
+                         )
+                ),
+                tabPanel("Region level",
+                         fluidRow(
+                           selectInput("region_case","Scenario",c("Upside","Downside")),
+                           column(10,
+                                  box(title="Regional level view for scenario", solidHeader = TRUE,
+                                      status = "primary",width="650px",height="530px",
+                                      plotlyOutput("plot_rgn",height="auto",width="auto"))
+                           )
+                           #,
+                           #  column(10,
+                           #         box(title="Regional level view for downside case", solidHeader = TRUE,
+                           #             status = "primary",width="650px",height="530px",
+                           #             plotlyOutput("plot_rgn_down",height="auto",width="auto"))
+                           #  )
+                         )
+                )
+    )
+    )
+    )
+
+
+server <- function(input, output,session) {
+  
+  vals <- reactiveValues(table=NULL,plot=NULL,table_chngd=NULL,impact_table=NULL,plot_imp=NULL)
+  data_sim_imp<-reactiveValues()
+  #########plot for impact analysis####################################################
+  f <- list(
+    family="Verdana, Geneva, sans-serif",
+    size = 13,
+    color = "black"
+  )
+  #####function for plot
+  imp_plot_fun<-function(x,y,s){
+    
+    if(max(unlist(y))/1000>0)
+    {text=paste(sapply(as.numeric(y)/1000000, round,digits=2),"M$",sep="")
+    }else{
+      text=paste(sapply(as.numeric(y)/1000, round,digits=2),"K$",sep="")
+    } 
+    
+    p <- plot_ly(
+      s, name = "comparison", type = "waterfall", measure = c("relative", "relative","relative", "total"),
+      x = ~x, textposition = "outside", y= ~y,text=text,textfont=list(size=9.5),
+      connector = list(line = list(color= "rgb(63, 63, 63)"))
+    ) %>%
+      #add_text(text=~y,textposition = "top",format="0.0$",textfont=list(size=9)) %>%
+      layout(title = paste("Dollar impact of parameters for",str_split(as.character(x[4])," ",simplify = T)[2]),
+             xaxis = list(title = ""),
+             yaxis = list(title = "",tickprefix="$")
+      )
+    return(p)
+  }      
+  
+  ##################color render functions##########################################
+  
+  render="function(instance, td, row, col, prop, value, cellProperties) {
+  Handsontable.renderers.NumericRenderer.apply(this, arguments);
+  
+  if (instance.params) {
+  hcols = instance.params.col_highlight;
+  hcols = hcols instanceof Array ? hcols : [hcols];
+  }
+  
+  if (instance.params && hcols.includes(col)) {
+  td.style.background = '#ffff00';
+  }
+}"
+  
+  render1="function(instance, td, row, col, prop, value, cellProperties) {
+  Handsontable.renderers.NumericRenderer.apply(this, arguments);
+  
+  if (instance.params) {
+  hcols = instance.params.col_highlight;
+  hcols = hcols instanceof Array ? hcols : [hcols];
+  }
+  
+  if (instance.params && hcols.includes(col)) {
+  td.style.background = '#d5d9e0';
+  }
+  }"
+  
+  data_fil<-reactiveValues()
+  data_fil_old<-reactiveValues()
+  
+  #######apply required filters
+  observeEvent(input$apply,{
+    data_fil$dat<-data %>% filter((Process %in% (input$process))&(Indication %in% (input$indication))&
+                                    (Country %in% (input$country))& (Segment %in% (input$segment))&(Pat_Cat %in% (input$patientcategory)) & 
+                                    (LoT %in% (input$lot)) & (tolower(trimws(Product)) %in% tolower(trimws(input$product)))) %>% mutate(NetPrice_pm_USD=as.integer(NetPrice_pm_USD)) %>% filter(Year >=as.integer(format(Sys.Date(), "%Y"))-1 & Year <=as.integer(format(Sys.Date(), "%Y"))+3)
+    
+    print("printing filters") 
+    print(paste(input$process,"fil",input$indication,"fil",input$country,"fil",
+                input$segment,"fil",input$patientcategory,"fil",input$product,"fil",input$lot))
+    print(head(as.data.frame(data_fil$dat)))
+    
+    data_fil_old$dat<-data_old %>% filter((Indication %in% (input$indication))&
+                                            (Country %in% (input$country))& (Segment %in% (input$segment))&(Pat_Cat %in% (input$patientcategory)) & 
+                                            (LoT %in% (input$lot)) & (tolower(trimws(Product)) %in% tolower(trimws(input$product)))) %>% mutate(NetPrice_pm_USD=as.integer(NetPrice_pm_USD)) %>% filter(Year >=as.integer(format(Sys.Date(), "%Y"))-1 & Year <=as.integer(format(Sys.Date(), "%Y"))+3)
+    
+    print("old startplan is also filter with same filters")
+    print(head(as.data.frame(data_fil_old$dat)))
+    
+  }   
+  )
+  
+  ####get required columns and send output dataset to ui
+  
+  observeEvent(input$apply,{
+    
+    data_req<-data.frame(data_fil$dat)
+    ####for table one in first tab################
+    if(nrow(data.frame(data_fil$dat))!=0)
+    {
+      #removing LOT and aggregating
+      data_nw<-data_req %>% select("Year","Compliance","compliance_upside","compliance_downside","NetPrice_pm_USD","price_upside","price_downside") %>% 
+        group_by(Year) %>% summarise(Compliance=mean(Compliance,na.omit=T),Compliance_upside=mean(compliance_upside,na.omit=T),Compliance_downside=mean(compliance_downside,na.omit=T),Price=mean(NetPrice_pm_USD,na.omit=T),Price_upside=mean(price_upside,na.omit=T),Price_downside=mean(price_downside,na.omit=T))
+      
+      data_nw<-data.frame(data_nw)
+      print("printing crap")
+      print(data_nw)
+      
+      #mutate(rev_chg= c(NA,(s[2:nrow(s),8]-s[1:nrow(s)-1,8])/s[1:nrow(s)-1,8]))
+      data_nw <- data_nw %>% 
+        mutate(Price_YoY = c(NA,(data_nw[2:nrow(data_nw),5]-data_nw[1:nrow(data_nw)-1,5])/data_nw[1:nrow(data_nw)-1,5])) %>% 
+        select("Year","Compliance","Compliance_upside","Compliance_downside","Price","Price_YoY","Price_upside","Price_downside")
+      # 
+      
+      output$table = renderRHandsontable({
+        
+        
+        ###formatting the table for displaying
+        vals$table <- rhandsontable(data.frame(data_nw),rowHeaders = FALSE,col_highlight =c(2,3,6,7),
+                                    colHeaders = c("Year","Compliance","Compliance up","Compliance down","Price","Price %YoY","Price up","Price down")) %>% 
+          hot_col(c("Compliance","Price %YoY"), readOnly = TRUE,format="0.0%") %>% 
+          hot_col("Price", readOnly = TRUE,format="0,0$") %>%
+          hot_col(c("Compliance up","Price down","Price up","Compliance down"),format="0.0%") %>% 
+          hot_cols(colWidths = 110,halign='htCenter') %>% hot_cols(renderer = render) %>% 
+          hot_col("Year", readOnly = TRUE, format = "0") 
+        vals$table
+      })
+      
+      ##### tab2 starts here
+      updateSelectInput(session,"year1","Select base year",unique(data_req$Year)[1:length(unique(data_req$Year))-1],selected=data_req$Year[1])
+      
+      observe({
+        y<-as.integer(input$year1)
+        y<-y+1
+        updateSelectInput(session,"year2","Select secondary year",c(NA,y),selected=y)
+      })
+      
+      
+      s<-data_req %>% group_by(Year,Country) %>% summarise(patients=sum(Pat),Comp_avg=mean(Compliance,na.omit=T), Price_avg=mean(NetPrice_pm_USD,na.omit=T))
+      s<-data.frame(s)
+      # s$patients<-sapply(s$patients,round)
+      s<-s %>% select("Year","patients","Comp_avg", "Price_avg") %>% mutate(volume=coalesce(patients,0)*coalesce(Comp_avg,0))
+      #print(data.frame(s))
+      
+      s<-s %>% mutate(impact_volume=c(NA,s[1:nrow(s)-1,4]*(s[2:nrow(s),5]-s[1:nrow(s)-1,5]))) %>%
+        mutate(impact_price=c(NA,s[2:nrow(s),5]*(s[2:nrow(s),4]-s[1:nrow(s)-1,4]))) %>% mutate(rev=volume*Price_avg) 
+      s_new<-s
+      s<-s %>% mutate(rev_chg= c(NA,(s[2:nrow(s),8]-s[1:nrow(s)-1,8])/s[1:nrow(s)-1,8]))
+      colnames(s)<-c("Year","Patients","Compliance","Price","Volume","Impact_volume","Impact_price","Revenue","Growth_rev")
+      
+      s$volume_impact_per<-s$Growth_rev*(s$Impact_volume/(s$Impact_volume+s$Impact_price))
+      s$price_impact_per<-s$Growth_rev*(s$Impact_price/(s$Impact_volume+s$Impact_price))
+      s1<-s[,c(1:4,8:11)]
+      print("printing s1")
+      print(s1)
+      
+      s2<-s1 %>% mutate(Price=as.integer(Price))
+      s2$Patients<-sapply(s2$Patients,round)
+      
+      output$impact_table = renderRHandsontable({
+        rhandsontable(s2,rowHeaders = FALSE,colHeaders = c("Year","Patients","Compliance","Price","Revenue","Growth rev","Volume impact","Price impact")) %>% 
+          hot_col("Year", readOnly = TRUE,format = "0") %>% hot_col("Price", readOnly = TRUE,format = "0,0$") %>% 
+          hot_col("Compliance", readOnly = TRUE,format = "0.0%") %>% 
+          hot_col("Volume impact", readOnly = TRUE,format = "0.0%") %>%
+          hot_col("Price impact", readOnly = TRUE,format = "0.0%") %>% 
+          hot_col("Revenue", readOnly = TRUE,format = "0a$") %>% hot_col("Growth rev", readOnly = TRUE,format = "0.0%") %>% 
+          hot_col("Patients",format = "0",readOnly = T) %>% 
+          hot_cols(colWidths = 110,halign='htCenter')
+      })
+      
+      
+      ###tab 3 is here##########
+      updateSelectInput(session,"year11","Select base year",unique(data_req$Year)[1:length(unique(data_req$Year))-1],selected=data_req$Year[1])
+      
+      #########tab 3 startplan older version for waterfall chart#############
+      s_old<-data.frame(data_fil_old$dat)
+      s_old<- s_old %>% group_by(Year,Country) %>% summarise(patients=sum(Pat),Comp_avg=mean(Compliance,na.omit=T), Price_avg=mean(NetPrice_pm_USD,na.omit=T))
+      s_old$patients<-sapply(s_old$patients,round)
+      s_old<-s_old %>% select("Year","patients","Comp_avg", "Price_avg") %>%
+        mutate(volume=coalesce(patients,0)*coalesce(Comp_avg,0)) %>% mutate(rev=volume*Price_avg) 
+      
+      ##comparison datatable with old vs new startplan
+      s_com<-merge.data.frame(s_old,s_new,by=c("Year"),suffixes=c("_old","_new"))
+      s_com<-s_com %>% mutate(impact_volume=coalesce(s_com[,4]*(s_com[,10]-s_com[,5]),0)) %>%
+        mutate(impact_price=coalesce(s_com[,10]*(s_com[,9]-s_com[,4]),0)) 
+      
+      # s22<-s_com %>% mutate(Price=as.integer(Price))
+      s_com2<-s_com %>% mutate(Growth_rev=(rev_new-rev_old)/rev_old)
+      s_com2$volume_impact_per<-s_com2$Growth_rev*(s_com2$impact_volume/(s_com2$impact_volume+s_com2$impact_price))
+      s_com2$price_impact_per<-s_com2$Growth_rev*(s_com2$impact_price/(s_com2$impact_volume+s_com2$impact_price))
+      s_com2<-s_com2[,c(1:4,7:9,6,13,14,15,16)]
+      
+      output$impact_table_old = renderRHandsontable({
+        rhandsontable(s_com2,rowHeaders = FALSE,
+                      colHeaders = c("Year","Patients_LF1","Compliance_LF1","Price_LF1","Patients_LF2","Compliance_LF2","Price_LF2","Revenue_LF1","Revenue_LF2","Growth rev","Volume impact","Price impact")) %>%
+          hot_col("Year", readOnly = TRUE,format = "0") %>% hot_col(c("Price_LF1","Price_LF2"), readOnly = TRUE,format = "0,0$") %>%
+          hot_col(c("Compliance_LF1","Compliance_LF2"), readOnly = TRUE,format = "0.0%") %>%
+          hot_col("Volume impact", readOnly = TRUE,format = "0.0%") %>%
+          hot_col("Price impact", readOnly = TRUE,format = "0.0%") %>%
+          hot_col(c("Revenue_LF1","Revenue_LF2"), readOnly = TRUE,format = "0a$") %>% hot_col("Growth rev", readOnly = TRUE,format = "0.0%") %>%
+          hot_col("Patients_LF1",format = "0",readOnly = T) %>%
+          hot_cols(colWidths = 110,halign='htCenter')
+      })
+      
+      
+      
+      
+      observe({
+        print('s combined printing')
+        print(head(s_com2))
+        
+        output$plot_imp<-renderPlotly({
+          yr<-as.integer(input$year1)
+          n<-which(s$Year==yr)
+          x=list(paste("Revenue",s[n,1]),"Volume impact","Price impact",paste("Revenue",s[n,1]+1))
+          y=list(s[n,8],s[n+1,6],s[n+1,7],s[n+1,8])
+          p<-imp_plot_fun(x,y,s)
+          vals$plot_imp<-ggplotly(p)
+          vals$plot_imp             })
+        
+        output$plot_imp_com<-renderPlotly({
+          yr<-as.integer(input$year11)
+          n<-which(s_com$Year==yr)
+          x=list(paste("Revenue-LF1",s_com[n,1]),"Volume impact","Price impact",paste("Revenue-LF2",s_com[n,1]))
+          y=list(s_com[n,6],s_com[n,11],s_com[n,12],s_com[n,13])
+          p1<-imp_plot_fun(x,y,s_com)
+          ggplotly(p1)
+        })
+        
+      })
+      
+      
+      
+      ######### end of tab 2 and 3 is till here
+      
+      
+    } else{
+      shinyalert(title = "Warning", text = "No available data for the selection!",type="warning")
+      # output$nodatwar<-renderText("No available data for the selection")
+    }
+  })
+  
+  #  #render data selected on front end to the server for processing
+  observeEvent(input$submit,{
+    print(hot_to_r(input$table))
+    tab_ui<-data.frame(hot_to_r(input$table))
+    print(colnames(tab_ui))
+    tab_ui$Target_price_upside<-tab_ui$Price*(1+tab_ui$Price_upside)
+    tab_ui$Target_price_downside<-tab_ui$Price*(1+tab_ui$Price_downside)
+    tab_ui$Target_compliance_upside<-ifelse(tab_ui$Compliance_upside>0,tab_ui$Compliance_upside,tab_ui$Compliance)
+    tab_ui$Target_compliance_downside<-ifelse(tab_ui$Compliance_downside>0,tab_ui$Compliance_downside,tab_ui$Compliance)
+    nw_tbl<-tab_ui %>% select("Year","Target_compliance_upside","Target_compliance_downside","Target_price_upside","Target_price_downside")
+    #colnames(nw_tbl)<-c("Year","Target_Compliance_up","Target_Price_up",)
+    
+    data_filtered<-data.frame(data_fil$dat)  
+    data_fil<-data_filtered %>% group_by(Year,Country) %>% summarise(patients=sum(Pat),Comp_avg=mean(Compliance,na.omit=T), Price_avg=mean(NetPrice_pm_USD,na.omit=T))
+    new_tabl2<-merge(data_fil,nw_tbl, by="Year")
+    grph_tbl<-new_tabl2 %>% mutate(revenue_upside=patients*Target_compliance_upside*Target_price_upside) %>% 
+      mutate(revenue_base=patients*Comp_avg*Price_avg) %>% mutate(revenue_downside=patients*Target_compliance_downside*Target_price_downside) 
+    
+    #data_sim_imp$dat<-grph_tbl
+    print(data_sim_imp$dat)
+    
+    nw_tbl_1<-grph_tbl %>% select("Year","Target_compliance_upside","Target_compliance_downside","Target_price_upside",
+                                  "Target_price_downside","revenue_upside","revenue_base","revenue_downside") %>%
+      mutate("upside_chg"=(revenue_upside-revenue_base)/revenue_base) %>% mutate("downside_chg"=(revenue_downside-revenue_base)/revenue_base)
+    
+    colnames(nw_tbl_1)<-c("Year","compliance_up","compliance_down","price_up",
+                          "price_down","revenue_upside","revenue_base","revenue_downside","upside_chg","downside_chg")
+    
+    ######as int to remove decimals for price
+    nw_tbl_1 <-nw_tbl_1 %>% mutate(price_down=as.integer(price_down)) %>% 
+      mutate(price_up=as.integer(price_up))
+    
+    output$table_chngd = renderRHandsontable({
+      
+      vals$table_chngd<-rhandsontable(data.frame(nw_tbl_1[,c(1,7,2,4,6,9,3,5,8,10)]),rowHeaders = FALSE,
+                                      colHeaders = c("Year","Revenue base","Compliance up","Price up","Revenue up","Rev up%chg",
+                                                     "Compliance down","Price down","Revenue down","Rev dn%chg"),readOnly = T,col_highlight=c(1,4,5,8,9)) %>% 
+        hot_cols(colWidths = 98,halign='htCenter') %>% hot_col("Year", readOnly = TRUE,format = "0") %>% 
+        hot_col(c("Price up","Price down"), readOnly = TRUE,format = "0,0$") %>%
+        hot_col(c("Revenue up","Revenue base","Revenue down"),readOnly = TRUE,format = "0a$") %>% 
+        hot_col(c("Compliance up","Compliance down","Rev up%chg","Rev dn%chg"), readOnly = TRUE,format = "0.0%") %>% 
+        hot_cols(renderer = render1)
+      
+      vals$table_chngd
+    })
+    
+    ###using the inputs to create a graph
+    
+    
+    ###plot customization
+    f <- list(
+      family="Verdana, Geneva, sans-serif",
+      size = 13,
+      color = "black"
+    )
+    
+    p <- plot_ly(grph_tbl,
+                 x =~factor(Year),
+                 y = ~revenue_upside,
+                 name ='upside',
+                 type = "scatter",mode='lines+markers',colors="#4B77BE",font=list(color="red",size=8))  %>%
+      
+      layout(title = paste("Revenue simulated -",input$country,"for product",input$product,sep=" "),
+             xaxis = list(
+               title = "Year",
+               titlefont = f),
+             yaxis = list(
+               title = "Revenue",tickprefix = "$",
+               titlefont = f),
+             barmode = 'group',
+             legend=list(font=list(size = 8,
+                                   color = "black",family="Verdana, Geneva, sans-serif"),orientation = 'h',xanchor = "center",y = 1.03,x=0.5)
+      ) %>%
+      add_trace(y = ~revenue_base, name = 'base scenario',mode = 'lines+markers') %>%
+      add_trace(y = ~revenue_downside, name = 'downside',mode = 'lines+markers')
+    
+    print(p)
+    
+    output$plot<-renderPlotly({
+      vals$plot<-ggplotly(p)
+      vals$plot
+    })
+    
+    
+    
+    #######################tab 2 impact analysis for scenario inputs##############3
+    sim_imp<-grph_tbl
+    sim_imp$Country<-NULL
+    colnames(sim_imp) <-c("Year","Patients","Compliance","Price",
+                          "compliance_up","compliance_down", "price_up", "price_down","revenue_upside",
+                          "Revenue","revenue_downside")
+    
+    print(sim_imp)
+    sim_imp<- sim_imp %>% mutate(volume_up=coalesce(Patients,0)*coalesce(compliance_up,0)) %>% 
+      mutate(volume_down=coalesce(Patients,0)*coalesce(compliance_down,0)) %>% 
+      mutate(volume=coalesce(Patients,0)*coalesce(Compliance,0))
+    
+    # sim_imp<-sim_imp %>% mutate(impact_volume_up=coalesce(sim_imp[,4]*(sim_imp[,12]-sim_imp[,14]),0)) %>%
+    # mutate(impact_price_up=coalesce(sim_imp[,12]*(sim_imp[,7]-sim_imp[,4]),0)) %>%
+    # mutate(impact_volume_down=coalesce(sim_imp[,4]*(sim_imp[,13]-sim_imp[,14]),0)) %>% 
+    # mutate(impact_price_down=coalesce(sim_imp[,13]*(sim_imp[,8]-sim_imp[,4]),0))
+    # 
+    #p1*v2-v1 and v2*p2-p1
+    #for across years for dollar impact base vs up/down case
+    nr<-nrow(na.omit(sim_imp))
+    sim_imp<-sim_imp %>% 
+      mutate(impact_volume_up=c(NA,sim_imp[1:nr-1,4]*(sim_imp[2:nr,12]-sim_imp[1:nr-1,14]))) %>%
+      mutate(impact_price_up=c(NA,sim_imp[2:nrow(sim_imp),12]*(sim_imp[2:nrow(sim_imp),7]-sim_imp[1:nrow(sim_imp)-1,4]))) %>%
+      mutate(impact_volume_down=c(NA,sim_imp[1:nrow(sim_imp)-1,4]*(sim_imp[2:nrow(sim_imp),13]-sim_imp[1:nrow(sim_imp)-1,14]))) %>%
+      mutate(impact_price_down=c(NA,sim_imp[2:nrow(sim_imp),13]*(sim_imp[2:nrow(sim_imp),8]-sim_imp[1:nrow(sim_imp)-1,4]))) %>%
+      mutate(Growth_rev_up = c(NA,(sim_imp[2:nrow(sim_imp),9]-sim_imp[1:nrow(sim_imp)-1,10])/sim_imp[1:nrow(sim_imp)-1,10])) %>%
+      mutate(Growth_rev_down = c(NA,(sim_imp[2:nrow(sim_imp),11]-sim_imp[1:nrow(sim_imp)-1,10])/sim_imp[1:nrow(sim_imp)-1,10])) %>% 
+      mutate(volume_impact_per_up=Growth_rev_up*(impact_volume_up/(impact_volume_up+impact_price_up))) %>%
+      mutate(price_impact_per_up=Growth_rev_up*(impact_price_up/(impact_volume_up+impact_price_up))) %>%
+      mutate(volume_impact_per_down=Growth_rev_down*(impact_volume_down/(impact_volume_down+impact_price_down))) %>%
+      mutate(price_impact_per_down=Growth_rev_down*(impact_price_down/(impact_volume_down+impact_price_down)))
+    
+    print(head(sim_imp))
+    
+    output$plot_imp_up<-renderPlotly({
+      yr<-as.integer(input$year1)
+      n<-which(sim_imp$Year==yr)
+      x=list(paste("Revenue",sim_imp[n,1]),"Volume impact","Price impact",paste("Revenue",sim_imp[n,1]+1))
+      y=list(sim_imp[n,10],sim_imp[n+1,15],sim_imp[n+1,16],sim_imp[n+1,9])
+      p<-imp_plot_fun(x,y,sim_imp)
+      ggplotly(p)
+    })
+    
+    output$plot_imp_down<-renderPlotly({
+      yr<-as.integer(input$year1)
+      n<-which(sim_imp$Year==yr)
+      x=list(paste("Revenue",sim_imp[n,1]),"Volume impact","Price impact",paste("Revenue",sim_imp[n,1]+1))
+      y=list(sim_imp[n,10],sim_imp[n+1,17],sim_imp[n+1,18],sim_imp[n+1,11])
+      p<-imp_plot_fun(x,y,sim_imp)
+      ggplotly(p)
+    })
+    
+    sim_imp$Patients<-sapply(sim_imp$Patients,round)
+    output$impact_table_up = renderRHandsontable({
+      rhandsontable(sim_imp[,c(1:5,7,10,9,19,21,22)],rowHeaders = FALSE,
+                    colHeaders = c("Year","Patients","Compliance","Price","Compliance up","Price up","Revenue","Revenue up","Growth rev","Volume impact","Price impact")) %>%
+        hot_col("Year", readOnly = TRUE,format = "0") %>% hot_col(c("Price","Price up"), readOnly = TRUE,format = "0,0$") %>%
+        hot_col(c("Compliance","Compliance up"), readOnly = TRUE,format = "0.0%") %>%
+        hot_col("Volume impact", readOnly = TRUE,format = "0.0%") %>%
+        hot_col("Price impact", readOnly = TRUE,format = "0.0%") %>%
+        hot_col(c("Revenue","Revenue up"), readOnly = TRUE,format = "0a$") %>%
+        hot_col("Patients",format = "0",readOnly = T) %>%
+        hot_cols(colWidths = 110,halign='htCenter')  %>% hot_col("Growth rev", readOnly = TRUE,format = "0.0%")
+    })
+    
+    output$impact_table_down = renderRHandsontable({
+      rhandsontable(sim_imp[,c(1:4,6,8,10,11,20,23,24)],rowHeaders = FALSE,
+                    colHeaders = c("Year","Patients","Compliance","Price","Compliance up","Price up","Revenue","Revenue up","Growth rev","Volume impact","Price impact")) %>%
+        hot_col("Year", readOnly = TRUE,format = "0") %>% hot_col(c("Price","Price up"), readOnly = TRUE,format = "0,0$") %>%
+        hot_col(c("Compliance","Compliance up"), readOnly = TRUE,format = "0.0%") %>%
+        hot_col("Volume impact", readOnly = TRUE,format = "0.0%") %>%
+        hot_col("Price impact", readOnly = TRUE,format = "0.0%") %>%
+        hot_col(c("Revenue","Revenue up"), readOnly = TRUE,format = "0a$") %>%
+        hot_col("Patients",format = "0",readOnly = T) %>%
+        hot_cols(colWidths = 110,halign='htCenter') %>% hot_col("Growth rev", readOnly = TRUE,format = "0.0%")
+    })
+    
+    
+    ###########################33region level view table########################
+    regn_lvl<-grph_tbl
+    colnames(regn_lvl) <-c("Year","Country","Patients","Compliance","Price",
+                           "compliance_up","compliance_down", "price_up", "price_down",
+                           "revenue_upside",
+                           "Revenue","revenue_downside")
+    regn_lvl <- regn_lvl %>% select("Year","Country","revenue_upside",
+                                    "Revenue","revenue_downside")
+    others<-as.data.frame(data)
+    others<-others %>% filter((Process %in% (input$process))&(Indication %in% (input$indication))&
+                                !(Country %in% (input$country)) & (Segment %in% (input$segment)) &
+                                (Pat_Cat %in% (input$patientcategory)) & 
+                                (LoT %in% (input$lot)) & (tolower(trimws(Product)) %in% tolower(trimws(input$product)))) %>% 
+      mutate(NetPrice_pm_USD=as.integer(NetPrice_pm_USD)) %>% 
+      filter(Year >=as.integer(format(Sys.Date(), "%Y"))-1 & Year <=as.integer(format(Sys.Date(), "%Y"))+3)
+    
+    
+    
+    others_agg<- others %>% group_by(Year,Country) %>% summarise(Pat=sum(Pat),Compliance=mean(Compliance,na.omit=T), NetPrice_pm_USD=mean(NetPrice_pm_USD,na.omit=T))
+    others_agg <-others_agg %>% select("Year","Country","Pat","Compliance","NetPrice_pm_USD") %>% mutate(Revenue=Pat*Compliance*NetPrice_pm_USD)
+    others_agg<-others_agg %>% select("Year","Country","Revenue") %>% mutate(revenue_upside=Revenue) %>% 
+      mutate(revenue_downside=Revenue)
+    
+    regn_comb<- as.data.frame(rbind(regn_lvl,as.data.frame(others_agg)))
+    
+    regn_comb$region<-if_else(regn_comb$Country %in% c("France","Germany","Italy","Spain","United Kingdom"),"Europe",if_else(regn_comb$Country %in% c("USA"),"USA","APAC"))
+    print('regions')
+    print(as.data.frame(regn_comb))
+    ##total percentage to 100 for region level
+    regn_comb_rgnlvl<-regn_comb %>% select("Year","region","revenue_downside","revenue_upside")
+    
+    regn_comb_rgnlvl<-regn_comb_rgnlvl %>%group_by(Year,region) %>% 
+      summarize_all(funs(sum))
+    print('region level sum')
+    print(as.data.frame(regn_comb_rgnlvl))
+    
+    
+    regn_comb_rgnlvl_tot<- regn_comb_rgnlvl %>% group_by(Year) %>% 
+      summarize_at(c("revenue_downside","revenue_upside"),funs(sum))
+    print(as.data.frame(regn_comb_rgnlvl_tot))
+    
+    regn_comb_rgnlvl<-merge.data.frame(regn_comb_rgnlvl_tot,regn_comb_rgnlvl,by=c("Year"),suffixes=c("_tot",""))
+    print(regn_comb_rgnlvl)
+    
+    regn_comb_rgnlvl$revenue_dn_per<-round((100 * regn_comb_rgnlvl$revenue_downside/regn_comb_rgnlvl$revenue_downside_tot),1)
+    regn_comb_rgnlvl$revenue_up_per<-round((100 * regn_comb_rgnlvl$revenue_upside/regn_comb_rgnlvl$revenue_upside_tot),1)
+    print('rgn lvl data')
+    print(regn_comb_rgnlvl)
+    #regn_comb<-regn_comb %>% group_by(Year,Country) %>% summarise(Rev_up=sum(revenue_upside),Rev=sum(Revenue),Revv_dn=sum(revenue_downside))
+    #merge both level datasets
+    regn_comb_rgnlvl <-regn_comb_rgnlvl %>% select("Year","region","revenue_dn_per","revenue_up_per")
+    
+    regn_comb_agg<-merge.data.frame(regn_comb_rgnlvl,regn_comb,by=c("Year","region"))
+    print('printing region level dataset')
+    print(as.data.frame(regn_comb_agg))
+    
+    ######function for the plots ###########################################
+    regn_plot<-function(data,rev,data_per,rev_per,title){
+      fig1 <- plot_ly(data=data,x = ~Year, y = ~rev, type = 'bar', 
+                      text= ~rev,textposition = 'inside',
+                      textfont = list(color="black",size=7),
+                      name = ~Country, color = ~Country) %>%
+        
+        layout(yaxis = list(title = title,texttemplate = '${y:s}'),xaxis=list(title=""),barmode = 'stack') 
+      #%>% add_text(textfont = t, textposition = 'inside')
+      
+      fig2<- plot_ly(data=data_per,x = ~Year,y = ~rev_per,type='bar',
+                     text= ~rev_per,textposition = 'inside',
+                     textfont = list(color="black",size=7),
+                     name = ~region, color = ~region) %>%
+        
+        layout(xaxis=list(title="",texttemplate = '%{y:s}'),barmode = 'stack',legend = list(orientation = 'h'))
+      
+      fig<-subplot(fig1,fig2)
+      return(fig)
+    }
+    # %>%
+    # add_text(textfont = list(color="black",size=8))
+    # print(fig)
+    
+    plot_rgn_up<-renderPlotly({
+      data=regn_comb_agg
+      rev=round(data$revenue_upside,0)
+      data_per=regn_comb_rgnlvl
+      rev_per=data_per$revenue_up_per
+      title='Revenue upside'
+      fig<-regn_plot(data,rev,data_per,rev_per,title)
+      ggplotly(fig)
+    })
+    
+    plot_rgn_down<-renderPlotly({
+      data=regn_comb_agg
+      rev=round(data$revenue_downside,0)
+      data_per=regn_comb_rgnlvl
+      rev_per=data_per$revenue_dn_per
+      title='Revenue downside'
+      fig<-regn_plot(data,rev,data_per,rev_per,title)
+      ggplotly(fig)
+    })
+    observeEvent(input$region_case,{
+      output$plot_rgn<- if(input$region_case %like% "Upside"){plot_rgn_up} else {plot_rgn_down}
+    })
+    
+    
+    
+  })
+  #########################downloading option###################################################3
+  output$downloadReport <- downloadHandler(
+    filename = function() {
+      paste('data', '.xlsx', sep='')
+      #paste0(paste0("test", Sys.Date()), ".png")
+    },
+    
+    content = function(file) {
+      table<-data.frame(hot_to_r(input$table))
+      table_chngd<-data.frame(hot_to_r(input$table_chngd))
+      impact_table<-data.frame(hot_to_r(input$impact_table))
+      impact_table_old<-data.frame(hot_to_r(input$impact_table_old))
+      
+      filters<-paste("Process:",input$process,",Indication:",input$indication,",Country:",input$country,",Segment:",
+                     input$segment,",PatCat",input$patientcategory,",Product",input$product,",LOT",input$lot)
+      print(filters)
+      
+      #insertPlot(file,"plot",input$plot, width = 15, height = 12, startRow = 3, startCol = "G", units = "cm")
+      
+      write.xlsx(data.frame(filters),file, sheetName="info",row.names = FALSE)
+      write.xlsx(table,file, sheetName="inputtable",row.names = FALSE,append = TRUE)
+      write.xlsx(table_chngd, file, sheetName="simtable", append=TRUE,row.names = FALSE)
+      write.xlsx(impact_table, file, sheetName="Dollarimpact", append=TRUE,row.names = FALSE)
+      write.xlsx(impact_table_old, file, sheetName="Dollarimpact_acrossplan", append=TRUE,row.names = FALSE)
+      while (!is.null(dev.list()))  dev.off()
+    }) 
+  
+  }
+
+shinyApp(ui,server)
+
+
+
+
